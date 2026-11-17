@@ -1,0 +1,26 @@
+{
+  "name": "webtorent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Stream torrents (MKV / AVI / MP4) in the browser: instant start, sequential head prefetch, persistent local library",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "fixtures": "bash test/make-fixtures.sh",
+    "seed": "node test/seeder.mjs",
+    "ui-test": "node test/ui-seek.mjs",
+    "buffer-watch": "node test/buffer-watch.mjs",
+    "codec-probe": "node test/codec-probe.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "hls.js": "^1.7.3",
+    "webtorrent": "^3.0.21",
+    "webtorrent-cli": "^6.0.1"
+  }
+}

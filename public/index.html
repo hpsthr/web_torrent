@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webtorent — stream torrents in the browser</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%2321d07a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="pulse"></span>
+    <strong>webtorent</strong>
+    <span class="tag" id="ffmpeg-badge">checking ffmpeg…</span>
+  </div>
+  <div class="storage" title="Space used inside the project folder">
+    <div class="storage-bar"><span id="storage-fill"></span></div>
+    <span id="storage-text" class="mono">–</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ------------------------------------------------------------------ add -->
+  <section class="card" id="add-card">
+    <h1>Paste a magnet link</h1>
+    <p class="hint">
+      Streams <b>MKV</b>, <b>AVI</b>, <b>MP4</b>, <b>WebM</b> and more straight from the swarm.
+      The first pieces are fetched first, so playback starts in seconds. Everything stays inside
+      <code id="data-path">./data</code> — nothing is written anywhere else on your Mac.
+    </p>
+    <form id="add-form" autocomplete="off">
+      <input id="magnet" type="text" spellcheck="false"
+             placeholder="magnet:?xt=urn:btih:…  (or a 40-character info hash)">
+      <button type="submit" id="add-btn">Open</button>
+    </form>
+    <p class="hint small" id="add-status"></p>
+  </section>
+
+  <!-- -------------------------------------------------------------- torrent -->
+  <section class="card hidden" id="torrent-card">
+    <div class="card-head">
+      <div>
+        <h2 id="torrent-name">—</h2>
+        <p class="hint small mono" id="torrent-meta">—</p>
+      </div>
+      <button class="ghost" id="close-torrent">Close torrent</button>
+    </div>
+
+    <div class="row">
+      <label class="field">
+        <span>Video file</span>
+        <select id="file-select"></select>
+      </label>
+      <button id="play-btn" class="primary">▶ Play</button>
+    </div>
+
+    <div class="progress">
+      <div class="progress-fill" id="file-progress"></div>
+    </div>
+    <p class="hint small mono" id="file-progress-text">idle</p>
+
+    <div class="actions">
+      <button class="ghost" id="keep-btn" title="Download the entire file and keep it for offline replay">Keep full file</button>
+      <!-- Seekable-copy conversion is off by default: it spawns a full ffmpeg
+           re-encode that pegs the CPU and causes buffering. Native on-demand
+           playback needs no copy. Hidden; enable with ENABLE_SEEKABLE_COPY=1. -->
+      <button class="ghost hidden" id="prepare-btn" title="Convert to a seekable MP4 (needs the full file)">Make seekable</button>
+      <button class="ghost danger" id="delete-btn">Delete data from disk</button>
+      <label class="check">
+        <input type="checkbox" id="autodelete">
+        <span>Delete when playback ends</span>
+      </label>
+    </div>
+    <p class="hint small" id="action-status"></p>
+  </section>
+
+  <!-- --------------------------------------------------------------- player -->
+  <section class="card hidden" id="player-card">
+    <div class="stage" id="stage">
+      <video id="video" playsinline preload="metadata"></video>
+      <div class="overlay hidden" id="overlay"><span id="overlay-text">loading…</span></div>
+
+      <!-- Controls sit on the picture and fade out while you watch. -->
+      <div class="controls" id="controls">
+        <input type="range" id="seek-range" min="0" max="1" value="0" step="0.1"
+               aria-label="Seek" title="Click or drag to jump">
+        <div class="controls-row">
+          <button class="ctl" id="playpause" title="Play / pause (space)">❚❚</button>
+          <button class="ctl" id="back10" title="Back 10 seconds (←)" aria-label="Back 10 seconds">−10</button>
+          <button class="ctl" id="fwd10" title="Forward 10 seconds (→)" aria-label="Forward 10 seconds">+10</button>
+          <span class="time"><b id="time-now">0:00</b> <i>/</i> <span id="time-total">--:--</span></span>
+          <span class="seek-note" id="seek-note"></span>
+          <span class="spacer"></span>
+          <button class="ctl" id="sync-btn" title="Audio delay / A/V sync">A/V</button>
+          <button class="ctl" id="subs-btn" title="Subtitles (c)">CC</button>
+          <button class="ctl" id="audio-btn" title="Audio track">AUD</button>
+          <button class="ctl" id="mute" title="Mute (m)">🔊</button>
+          <input type="range" id="volume" class="volume" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+          <button class="ctl" id="fullscreen" title="Fullscreen (f)">⛶</button>
+        </div>
+      </div>
+
+      <!-- Audio delay, for sources or output devices that are slightly out of sync -->
+      <div class="sync-panel gone" id="sync-panel">
+        <div class="subs-head">
+          <strong>Audio delay</strong>
+          <button class="ctl" id="sync-close" title="Close">✕</button>
+        </div>
+        <div class="sync-body">
+          <p class="hint small">Delay the audio to line it up with the picture. Negative values play audio earlier.</p>
+          <div class="sync-row">
+            <button class="ctl" id="sync-minus">− 50 ms</button>
+            <b id="sync-value">0 ms</b>
+            <button class="ctl" id="sync-plus">+ 50 ms</button>
+            <button class="ctl" id="sync-reset">Reset</button>
+          </div>
+          <p class="hint small" id="sync-note"></p>
+        </div>
+      </div>
+
+      <!-- Audio track picker: for MKVs with multiple audio tracks -->
+      <div class="audio-panel gone" id="audio-panel">
+        <div class="subs-head">
+          <strong>Audio track</strong>
+          <button class="ctl" id="audio-close" title="Close">✕</button>
+        </div>
+        <div class="subs-list" id="audio-list"></div>
+        <p class="hint small">Switching the track replays through the live converter. A prepared MP4 always keeps the first audio track.</p>
+      </div>
+
+      <!-- Subtitle picker: embedded tracks, downloads, and OpenSubtitles search -->
+      <div class="subs-panel gone" id="subs-panel">
+        <div class="subs-head">
+          <strong>Subtitles</strong>
+          <button class="ctl" id="subs-close" title="Close">✕</button>
+        </div>
+        <div class="subs-list" id="subs-list"></div>
+        <div class="subs-provider" id="subs-provider">
+          <div class="subsync">
+            <div class="subs-head"><strong>Timing for this track</strong></div>
+            <div class="sync-row">
+              <button class="ctl" id="subsync-minus">− 50 ms</button>
+              <b id="subsync-value">0 ms</b>
+              <button class="ctl" id="subsync-plus">+ 50 ms</button>
+              <button class="ctl" id="subsync-reset">Reset</button>
+            </div>
+            <div class="sync-row">
+              <span class="muted small">Drift (frame-rate)</span>
+              <select id="subsync-scale" aria-label="Subtitle drift correction"></select>
+            </div>
+            <p class="hint small">Shift this subtitle track earlier/later to match the speech. Saved for this file and track, so it survives switching and restarts.</p>
+          </div>
+          <div class="subs-search">
+            <input type="text" id="subs-query" placeholder="Search OpenSubtitles…" spellcheck="false">
+            <select id="subs-lang" aria-label="Language">
+              <option value="en">English</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="it">Italian</option>
+              <option value="pt">Portuguese</option>
+              <option value="nl">Dutch</option>
+              <option value="pl">Polish</option>
+              <option value="ru">Russian</option>
+              <option value="ar">Arabic</option>
+              <option value="hi">Hindi</option>
+              <option value="tr">Turkish</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+              <option value="zh">Chinese</option>
+            </select>
+            <button class="ctl" id="subs-search-btn">Search</button>
+          </div>
+          <p class="hint small" id="subs-status"></p>
+          <div class="subs-results" id="subs-results"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <span class="chip" id="chip-mode">mode —</span>
+      <span class="chip" id="chip-peers">peers 0</span>
+      <span class="chip" id="chip-speed">↓ 0 B/s</span>
+      <span class="chip" id="chip-buffer">buffer 0.0s</span>
+      <span class="chip" id="chip-ratio">—</span>
+    </div>
+
+    <p class="hint small" id="mode-reason">—</p>
+    <p class="hint small warn hidden" id="quota-warn">
+      Storage limit reached. Playback continues from what is already downloaded — delete something in the library to free space.
+    </p>
+    <p class="hint small warn hidden" id="player-warn"></p>
+  </section>
+
+  <!-- -------------------------------------------------------------- library -->
+  <section class="card" id="library-card">
+    <div class="card-head">
+      <h2>Library</h2>
+      <span class="hint small" id="library-summary">—</span>
+    </div>
+    <ul class="library" id="library-list"></ul>
+    <p class="hint small" id="library-empty">Nothing saved yet.</p>
+  </section>
+
+</main>
+
+<div id="toasts"></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
